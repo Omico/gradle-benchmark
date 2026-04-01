@@ -1,0 +1,13 @@
+*.log
+.DS_Store
+.gradle/
+.idea/
+.java-version
+.kotlin/
+__pycache__/
+benchmark.csv
+benchmark.html
+build/
+gradle-bench-matrix/**/gradle-wrapper.jar
+gradle-bench-matrix/*/gradlew*
+gradle-user-home/

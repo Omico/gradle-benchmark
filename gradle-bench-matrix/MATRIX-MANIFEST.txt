@@ -1,0 +1,31 @@
+# modules × lines_per_file × source_mode → subdir
+# files_per_module (fixed) = 10
+# dependency_pattern = chain
+
+10	10	kotlin-only	m0010-l0010-kotlin
+10	10	java-only	m0010-l0010-java
+10	10	mixed	m0010-l0010-mixed
+10	100	kotlin-only	m0010-l0100-kotlin
+10	100	java-only	m0010-l0100-java
+10	100	mixed	m0010-l0100-mixed
+10	1000	kotlin-only	m0010-l1000-kotlin
+10	1000	java-only	m0010-l1000-java
+10	1000	mixed	m0010-l1000-mixed
+100	10	kotlin-only	m0100-l0010-kotlin
+100	10	java-only	m0100-l0010-java
+100	10	mixed	m0100-l0010-mixed
+100	100	kotlin-only	m0100-l0100-kotlin
+100	100	java-only	m0100-l0100-java
+100	100	mixed	m0100-l0100-mixed
+100	1000	kotlin-only	m0100-l1000-kotlin
+100	1000	java-only	m0100-l1000-java
+100	1000	mixed	m0100-l1000-mixed
+1000	10	kotlin-only	m1000-l0010-kotlin
+1000	10	java-only	m1000-l0010-java
+1000	10	mixed	m1000-l0010-mixed
+1000	100	kotlin-only	m1000-l0100-kotlin
+1000	100	java-only	m1000-l0100-java
+1000	100	mixed	m1000-l0100-mixed
+1000	1000	kotlin-only	m1000-l1000-kotlin
+1000	1000	java-only	m1000-l1000-java
+1000	1000	mixed	m1000-l1000-mixed

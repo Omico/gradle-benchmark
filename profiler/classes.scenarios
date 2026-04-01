@@ -1,0 +1,4 @@
+classes {
+    tasks = ["classes"]
+    cleanup-tasks = ["clean"]
+}
