@@ -29,6 +29,10 @@ Gradle 行为对比（--compare-gradle-modes）：
   # 指定 Gradle 守护进程/构建 JDK（写入 <gradle-user-home>/gradle.properties 的 org.gradle.java.home；Tooling API 会读取）
   python3 run-gradle-profiler-matrix.py --matrix-root ./gradle-bench-matrix --jdk-version 11
   # 或直接 --java-home <JDK 根目录>；与 --gradle-version 无关；请在仓库根等与 profiler 相同的 cwd 下运行（默认 GUH 为 ./gradle-user-home）
+  # 超大工程若遇守护进程 OOM（GC thrashing），可增大堆，例如：
+  #   --gradle-jvmargs '-Xmx8g -XX:MaxMetaspaceSize=1g'
+  # 中断后续跑（跳过已产出有效 benchmark.csv 的子工程/场景）：
+  #   加 --resume（与上次相同的 --matrix-root、--results-root 等）
 
 默认在每次执行 gradle-profiler 前清理子工程内 .gradle 与各模块 build/。
 加 --no-clean-workspace 可关闭。
@@ -128,19 +132,20 @@ def resolve_gradle_java_home(args: argparse.Namespace) -> Path | None:
     return None
 
 
-def upsert_gradle_user_home_java_home(
-    gradle_user_home: Path, java_home: Path, *, dry_run: bool = False
+def upsert_gradle_user_home_property(
+    gradle_user_home: Path,
+    key: str,
+    value: str,
+    *,
+    dry_run: bool = False,
 ) -> None:
-    """在 gradle_user_home/gradle.properties 中设置 org.gradle.java.home（供 Gradle Tooling API / 守护进程读取）。
+    """在 gradle_user_home/gradle.properties 中设置单行属性（供 Gradle Tooling API / 守护进程读取）。
 
     gradle-profiler 通过 GradleConnector 起守护进程时不会走 gradlew，环境变量 GRADLE_OPTS 往往不生效；
     写入该文件与 gradle-profiler 的行为一致。
     """
-    _ensure_jdk_has_java(java_home)
-    key = "org.gradle.java.home"
-    value = str(java_home.resolve()).replace("\\", "/")
-    props = gradle_user_home / "gradle.properties"
     assign = f"{key}={value}\n"
+    props = gradle_user_home / "gradle.properties"
     if dry_run:
         print(f"    [dry-run] 将写入 {props}: {key}={value}", flush=True)
         return
@@ -168,6 +173,16 @@ def upsert_gradle_user_home_java_home(
     else:
         props.write_text(assign, encoding="utf-8")
     print(f"  已写入 {props.name}：{key}={value}", flush=True)
+
+
+def upsert_gradle_user_home_java_home(
+    gradle_user_home: Path, java_home: Path, *, dry_run: bool = False
+) -> None:
+    """在 gradle_user_home/gradle.properties 中设置 org.gradle.java.home。"""
+    _ensure_jdk_has_java(java_home)
+    key = "org.gradle.java.home"
+    value = str(java_home.resolve()).replace("\\", "/")
+    upsert_gradle_user_home_property(gradle_user_home, key, value, dry_run=dry_run)
 
 
 def clean_gradle_workspace(project: Path, *, dry_run: bool = False) -> None:
@@ -339,6 +354,14 @@ def _median_from_wide_csv(csv_path: Path) -> float | None:
     return float(statistics.median(vals)) if vals else None
 
 
+def profiler_output_has_median(out_dir: Path) -> bool:
+    """输出目录是否已有可解析出 measured 耗时中位数的 benchmark.csv（用于 --resume）。"""
+    csv_p = find_benchmark_csv(out_dir)
+    if csv_p is None:
+        return False
+    return median_measured_seconds(csv_p) is not None
+
+
 @dataclass
 class SummaryRow:
     project: str
@@ -407,6 +430,52 @@ def write_summary_tables(rows: list[SummaryRow], dest_dir: Path) -> None:
         )
     lines.append("")
     md.write_text("\n".join(lines), encoding="utf-8")
+
+
+def build_summary_row_for_mode_scenario(
+    project_name: str,
+    scenario: str,
+    out_dir: Path,
+    args: argparse.Namespace,
+) -> SummaryRow:
+    """从已有 profiler 输出目录组装一行对比汇总（新跑或 --resume 跳过均可）。"""
+    urls_console: list[str] = []
+    console_log = (
+        out_dir / "profiler-console.log" if args.capture_profiler_console else None
+    )
+    if console_log is not None and console_log.is_file():
+        urls_console = urls_from_profiler_console_text(
+            console_log.read_text(encoding="utf-8", errors="replace")
+        )
+    urls = _dedupe_urls_preserve_order(urls_console)
+
+    median_s = ""
+    csv_p = find_benchmark_csv(out_dir)
+    if csv_p:
+        med = median_measured_seconds(csv_p)
+        if med is not None:
+            median_s = f"{med:.2f}"
+
+    flags = SCENARIO_FLAGS.get(scenario, ("?", "?", "?"))
+    scan_text = (
+        "；".join(urls)
+        if urls
+        else (
+            "（无 URL；已使用 --no-capture-profiler-console，无法从控制台日志解析链接）"
+            if not args.capture_profiler_console
+            else "（profiler-console.log 中未解析到含 /s/ 的链接）"
+        )
+    )
+
+    return SummaryRow(
+        project=project_name,
+        scenario=scenario,
+        build_cache=flags[0],
+        config_cache=flags[1],
+        configure_on_demand=flags[2],
+        median_seconds=median_s or "—",
+        build_scans=scan_text,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -488,6 +557,13 @@ def parse_args() -> argparse.Namespace:
         "若使用 --java-home/--jdk-version 且未指定本项，则使用 ./gradle-user-home 的绝对路径并写入 org.gradle.java.home。",
     )
     p.add_argument(
+        "--gradle-jvmargs",
+        default=None,
+        metavar="JVMARGS",
+        help="写入上述 gradle-user-home 下 gradle.properties 的 org.gradle.jvmargs（守护进程堆等；"
+        "适合千模块工程避免 OOM）。示例：-Xmx8g -XX:MaxMetaspaceSize=1g（含空格时请整段加引号）。",
+    )
+    p.add_argument(
         "--skip-gradlew-check",
         action="store_true",
         help="不在子工程下检查 gradlew（可配合 --gradle-version 等由 profiler 拉取 Gradle；默认会检查）",
@@ -503,6 +579,12 @@ def parse_args() -> argparse.Namespace:
         "--no-clean-workspace",
         action="store_true",
         help="运行 gradle-profiler 前不清理子工程内的 .gradle 与各模块 build/（默认每次运行前会清理）",
+    )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="续跑：若目标输出目录下已有可解析 measured 中位数的 benchmark.csv，则跳过该次子工程/场景"
+        "（须与上次使用相同的 --matrix-root、--results-root/--compare-gradle-modes 布局；dry-run 时不跳过以便预览命令）",
     )
     p.add_argument(
         "--capture-profiler-console",
@@ -596,6 +678,22 @@ def main() -> int:
     elif args.gradle_user_home is not None:
         profiler_guh = args.gradle_user_home.expanduser().resolve()
 
+    if args.gradle_jvmargs:
+        jv = args.gradle_jvmargs.strip()
+        if not jv:
+            print("--gradle-jvmargs 不能为空", file=sys.stderr)
+            return 2
+        if profiler_guh is None:
+            profiler_guh = (
+                args.gradle_user_home or Path.cwd() / "gradle-user-home"
+            ).resolve()
+        upsert_gradle_user_home_property(
+            profiler_guh,
+            "org.gradle.jvmargs",
+            jv,
+            dry_run=args.dry_run,
+        )
+
     root = args.matrix_root.resolve()
     if not root.is_dir():
         print(f"--matrix-root 不是目录: {root}", file=sys.stderr)
@@ -628,8 +726,9 @@ def main() -> int:
         print(f"场景文件不存在: {scenario_path}", file=sys.stderr)
         return 2
 
+    resume_note = "（--resume：有效 benchmark 已存在则跳过）" if args.resume else ""
     print(
-        f"将对 {len(projects)} 个子工程**顺序**执行 gradle-profiler（单进程，不并行）。",
+        f"将对 {len(projects)} 个子工程**顺序**执行 gradle-profiler（单进程，不并行）{resume_note}。",
         flush=True,
     )
 
@@ -650,6 +749,12 @@ def main() -> int:
             continue
 
         print(f"\n[{idx}/{len(projects)}] {rel}\n  → 输出: {out_dir}", flush=True)
+        if args.resume and not args.dry_run and profiler_output_has_median(out_dir):
+            print(
+                f"  （--resume）跳过：已有可解析的 benchmark 结果",
+                flush=True,
+            )
+            continue
         maybe_clean_workspace(args, proj)
         console_log = (
             out_dir / "profiler-console.log" if args.capture_profiler_console else None
@@ -688,9 +793,12 @@ def run_compare_modes(
     *,
     profiler_gradle_user_home: Path | None,
 ) -> int:
+    resume_extra = ""
+    if args.resume:
+        resume_extra = " 已开启 **--resume**（有效 benchmark 已存在则跳过该场景，dry-run 仍打印命令）。"
     print(
         f"对比 Gradle 行为：将对 {len(projects)} 个子工程 × {len(GRADLE_MODE_SCENARIO_NAMES)} 个场景"
-        f"**顺序**执行（单进程，不并行）。",
+        f"**顺序**执行（单进程，不并行）。{resume_extra}",
         flush=True,
     )
 
@@ -715,65 +823,41 @@ def run_compare_modes(
                 f"\n[{idx}/{len(projects)}] {rel} / 场景 {scenario}\n  → {out_dir}",
                 flush=True,
             )
-            maybe_clean_workspace(args, proj)
-
-            console_log = (
-                out_dir / "profiler-console.log"
-                if args.capture_profiler_console
-                else None
+            skip_completed = (
+                args.resume and not args.dry_run and profiler_output_has_median(out_dir)
             )
-            rc = run_profiler_once(
-                args,
-                proj,
-                modes_file,
-                scenario,
-                out_dir,
-                profiler_gradle_user_home=profiler_gradle_user_home,
-                console_log=console_log,
-            )
-            if rc != 0:
+            if skip_completed:
                 print(
-                    f"  gradle-profiler 退出码 {rc}，立即退出（未写 summary）",
-                    file=sys.stderr,
+                    "  （--resume）跳过：已有可解析的 benchmark 结果",
                     flush=True,
                 )
-                return rc
+            else:
+                maybe_clean_workspace(args, proj)
 
-            urls_console: list[str] = []
-            if console_log is not None and console_log.is_file():
-                urls_console = urls_from_profiler_console_text(
-                    console_log.read_text(encoding="utf-8", errors="replace")
+                console_log = (
+                    out_dir / "profiler-console.log"
+                    if args.capture_profiler_console
+                    else None
                 )
-            urls = _dedupe_urls_preserve_order(urls_console)
-
-            median_s = ""
-            csv_p = find_benchmark_csv(out_dir)
-            if csv_p:
-                med = median_measured_seconds(csv_p)
-                if med is not None:
-                    median_s = f"{med:.2f}"
-
-            flags = SCENARIO_FLAGS.get(scenario, ("?", "?", "?"))
-            scan_text = (
-                "；".join(urls)
-                if urls
-                else (
-                    "（无 URL；已使用 --no-capture-profiler-console，无法从控制台日志解析链接）"
-                    if not args.capture_profiler_console
-                    else "（profiler-console.log 中未解析到含 /s/ 的链接）"
+                rc = run_profiler_once(
+                    args,
+                    proj,
+                    modes_file,
+                    scenario,
+                    out_dir,
+                    profiler_gradle_user_home=profiler_gradle_user_home,
+                    console_log=console_log,
                 )
-            )
+                if rc != 0:
+                    print(
+                        f"  gradle-profiler 退出码 {rc}，立即退出（未写 summary）",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return rc
 
             summary_rows.append(
-                SummaryRow(
-                    project=rel,
-                    scenario=scenario,
-                    build_cache=flags[0],
-                    config_cache=flags[1],
-                    configure_on_demand=flags[2],
-                    median_seconds=median_s or "—",
-                    build_scans=scan_text,
-                )
+                build_summary_row_for_mode_scenario(rel, scenario, out_dir, args)
             )
 
     if args.dry_run:
