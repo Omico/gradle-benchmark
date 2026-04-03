@@ -6,9 +6,9 @@
 本机需已安装 gradle-profiler（PATH 中可执行，或 --profiler 指定路径）。
 
 Gradle 行为对比（--compare-gradle-modes）：
-  在 profiler/gradle-modes.scenarios 中定义多种场景；均以 clean + classes 为前提，
-  并统一附加 --rerun-tasks 作为基准（避免任务 UP-TO-DATE 跳过）。
-  各场景差异：构建缓存 / 配置缓存 / configure-on-demand 的组合。
+  在 profiler/gradle-modes.scenarios 中定义场景；均以 clean + classes 为前提，
+  并统一附加 --rerun-tasks 与 --parallel（与生成工程 org.gradle.parallel=true 一致）。
+  四档：baseline（无缓存）/ build-cache / build-cache+configuration-cache / 三者全开。
   跑完后在 <results-root>/summary.md 与 summary.tsv 生成汇总表；可选附上 Build Scan 风格 URL（路径含 /s/），
   默认将 gradle-profiler 输出写入各次输出目录下的 profiler-console.log 并从中解析；加 --no-capture-profiler-console 可关闭。
 
@@ -62,8 +62,6 @@ DEFAULT_MODES_SCENARIO_FILE = REPO_PROFILER_DIR / "gradle-modes.scenarios"
 GRADLE_MODE_SCENARIO_NAMES: tuple[str, ...] = (
     "baseline",
     "build-cache",
-    "configuration-cache",
-    "configure-on-demand",
     "build-cache-configuration-cache",
     "all-three",
 )
@@ -72,8 +70,6 @@ GRADLE_MODE_SCENARIO_NAMES: tuple[str, ...] = (
 SCENARIO_FLAGS: dict[str, tuple[str, str, str]] = {
     "baseline": ("否", "否", "否"),
     "build-cache": ("是", "否", "否"),
-    "configuration-cache": ("否", "是", "否"),
-    "configure-on-demand": ("否", "否", "是"),
     "build-cache-configuration-cache": ("是", "是", "否"),
     "all-three": ("是", "是", "是"),
 }
@@ -412,7 +408,7 @@ def write_summary_tables(rows: list[SummaryRow], dest_dir: Path) -> None:
     lines = [
         "# Gradle Profiler 汇总（可选：Build Scan URL）",
         "",
-        "所有场景均在 `clean` 后执行 `classes`，并统一带 **`--rerun-tasks`** 作为基准（避免 UP-TO-DATE 跳过任务）。",
+        "所有场景均在 `clean` 后执行 `classes`，并统一带 **`--rerun-tasks`** 与 **`--parallel`**（避免 UP-TO-DATE 跳过任务，并与多模块并行执行一致）。",
         "",
         "说明：默认在**每次**运行 gradle-profiler 前会清理该子工程根目录 `.gradle` 与各 `mNNNN/build/`（`--no-clean-workspace` 可关闭），"
         "以便场景之间尽量不共用本地配置/构建状态。",

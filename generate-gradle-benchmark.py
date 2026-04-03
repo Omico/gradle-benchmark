@@ -3,20 +3,19 @@
 生成用于构建性能测试的多模块 Gradle 工程。
 
 示例:
-  # 默认：在当前工作目录下创建 gradle-bench-0001、gradle-bench-0002…（序号 = 已有最大 + 1）
-  python3 generate-gradle-benchmark.py -n 100 --files-per-module 20 --lines-per-file 30
+  # 默认：1000 模块 × 每模块 10 文件 × 每文件 500 行、mixed、Gradle 7.5.1、Kotlin 2.0.21、JDK 11
+  python3 generate-gradle-benchmark.py
 
   python3 generate-gradle-benchmark.py --out ./my-bench -n 100 \\
     --module-source-mode mixed --dependency-pattern chain
 
-  # 多维度批量：模块数 {10,100,1000} × 每文件行数 {10,100,1000} × 源码类型 {kt,java,mixed} → 27 个子工程
+  # 全维度矩阵（固定 1000 模块、每文件 500 行）：Gradle×JDK×源码类型×Kotlin（纯 Java 无 Kotlin 版本维）→ 99 个子工程
   python3 generate-gradle-benchmark.py --matrix --matrix-out ./my-matrix
 """
 
 from __future__ import annotations
 
 import argparse
-import itertools
 import re
 import shutil
 import sys
@@ -27,15 +26,28 @@ from pathlib import Path
 DEFAULT_BENCH_DIR_PREFIX = "gradle-bench-"
 REPO_DIR = Path(__file__).resolve().parent
 
-# --matrix 默认三维取值（与 CLI 说明一致）
-MATRIX_MODULE_COUNTS = (10, 100, 1000)
-MATRIX_LINES_PER_FILE = (10, 100, 1000)
-MATRIX_SOURCE_MODES = ("kotlin-only", "java-only", "mixed")
-MATRIX_MODE_DIR_TAG = {
-    "kotlin-only": "kotlin",
-    "java-only": "java",
-    "mixed": "mixed",
-}
+DEFAULT_GRADLE_VERSION = "7.5.1"
+DEFAULT_KOTLIN_PLUGIN_VERSION = "2.0.21"
+DEFAULT_MODULES = 1000
+DEFAULT_LINES_PER_FILE = 500
+
+# --matrix：固定规模 + 全因子（纯 java-only 不展开 Kotlin 版本）
+MATRIX_MODULES = 1000
+MATRIX_LINES_PER_FILE_FIXED = 500
+MATRIX_GRADLE_VERSIONS = ("7.5.1", "8.14.4", "9.4.1")
+MATRIX_JVM_TARGETS = (
+    "11",
+    # "17",
+    # "21",
+)
+MATRIX_SOURCE_MODES = ("java-only", "kotlin-only", "mixed")
+MATRIX_KOTLIN_VERSIONS = (
+    "2.0.21",
+    # "2.1.21",
+    # "2.2.21",
+    # "2.3.20",
+    "2.4.0-Beta1",
+)
 
 
 def next_seq_project_dir(parent: Path, prefix: str = DEFAULT_BENCH_DIR_PREFIX) -> Path:
@@ -59,11 +71,13 @@ def module_name(index: int) -> str:
 
 
 def kotlin_plugin_version() -> str:
-    return "2.0.21"
+    """与 --kotlin-version 默认值一致（文档/兼容用）。"""
+    return DEFAULT_KOTLIN_PLUGIN_VERSION
 
 
 def gradle_version() -> str:
-    return "7.5.1"
+    """与 --gradle-version 默认值一致（文档/兼容用）。"""
+    return DEFAULT_GRADLE_VERSION
 
 
 def develocity_plugin_version() -> str:
@@ -97,7 +111,8 @@ def parse_args() -> argparse.Namespace:
         "--modules",
         type=int,
         default=None,
-        help="子模块数量（例如 10 / 100 / 1000）。与 --matrix 互斥。",
+        metavar="N",
+        help=f"子模块数量（默认 {DEFAULT_MODULES}；与 --matrix 互斥，勿与 --matrix 同传）。",
     )
     p.add_argument(
         "--files-per-module",
@@ -108,7 +123,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--lines-per-file",
         type=int,
-        default=40,
+        default=DEFAULT_LINES_PER_FILE,
         help="每个源码文件中的业务代码行数（不含 package/imports/括号等骨架）",
     )
     p.add_argument(
@@ -120,7 +135,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--module-source-mode",
         choices=("java-only", "kotlin-only", "mixed"),
-        default="kotlin-only",
+        default="mixed",
         help="模块内源码类型：仅 Java / 仅 Kotlin / 混合（Java+Kotlin 各占约一半文件）",
     )
     p.add_argument(
@@ -137,7 +152,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--jvm-target",
         default="11",
-        help="Java/Kotlin 编译目标 JVM 版本",
+        help="Java/Kotlin 编译目标 JVM 版本（工具链 languageVersion）",
+    )
+    p.add_argument(
+        "--gradle-version",
+        default=DEFAULT_GRADLE_VERSION,
+        help=f"Gradle Wrapper 发行版（默认 {DEFAULT_GRADLE_VERSION}）",
+    )
+    p.add_argument(
+        "--kotlin-version",
+        default=DEFAULT_KOTLIN_PLUGIN_VERSION,
+        help="根工程与子模块 Kotlin JVM 插件版本（仅 kotlin-only / mixed 生效；默认 "
+        f"{DEFAULT_KOTLIN_PLUGIN_VERSION}）",
     )
     p.add_argument(
         "--force",
@@ -147,8 +173,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--matrix",
         action="store_true",
-        help="按固定三维生成多份工程：模块数 10/100/1000 × 每文件行数 10/100/1000 × "
-        "kotlin-only/java-only/mixed（共 27 份），写入 --matrix-out 下子目录",
+        help="按固定规模生成全因子矩阵：每份均为 "
+        f"{MATRIX_MODULES} 模块、每文件 {MATRIX_LINES_PER_FILE_FIXED} 行；"
+        f"Gradle {', '.join(MATRIX_GRADLE_VERSIONS)} × JDK {', '.join(MATRIX_JVM_TARGETS)} × "
+        "源码 java-only / kotlin-only / mixed；kotlin-only 与 mixed 再 × Kotlin "
+        f"{len(MATRIX_KOTLIN_VERSIONS)} 档，java-only 不展开 Kotlin 版本（共 99 份），写入 --matrix-out",
     )
     p.add_argument(
         "--matrix-out",
@@ -272,6 +301,11 @@ def file_kind_for_slot(mode: str, slot: int, total: int) -> str:
     return "java" if slot % 2 == 0 else "kt"
 
 
+def root_gradle_properties() -> str:
+    """根目录 gradle.properties：多模块构建并行执行（与 ./gradlew --parallel 一致）。"""
+    return "org.gradle.parallel=true\n"
+
+
 def root_settings_kts(names: list[str]) -> str:
     # 与 gradle-bench-matrix Kotlin 子工程 settings 一致：@file:Suppress、
     # dependencyResolutionManagement(mavenCentral)、Develocity、buildscan 空格字段
@@ -307,18 +341,27 @@ develocity {
     return template.replace("__DV__", dv).replace("__INCLUDES__", includes)
 
 
-def root_build_kts(jvm_target: str) -> str:
-    kv = kotlin_plugin_version()
+def root_build_kts(module_source_mode: str, kotlin_version: str | None) -> str:
+    """java-only 时不应用 Kotlin 插件；kotlin-only / mixed 时在根工程声明版本供子模块使用。"""
+    sub = textwrap.dedent(
+        """
+        subprojects {
+            group = "bench.generated"
+            version = "1.0"
+        }
+        """
+    ).lstrip()
+    if module_source_mode == "java-only":
+        return sub
+    if not kotlin_version:
+        raise ValueError("kotlin-only / mixed 需要 kotlin_version")
     return textwrap.dedent(
         f"""
         plugins {{
-            kotlin("jvm") version "{kv}" apply false
+            kotlin("jvm") version "{kotlin_version}" apply false
         }}
 
-        subprojects {{
-            group = "bench.generated"
-            version = "1.0"
-        }}
+        {sub}
         """
     ).lstrip()
 
@@ -356,13 +399,6 @@ __DEP__
     else:
         template = """plugins {
     kotlin("jvm")
-    `java-library`
-}
-
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(__JVM__))
-    }
 }
 
 kotlin {
@@ -376,9 +412,9 @@ __DEP__
     return template.replace("__JVM__", jvm_target).replace("__DEP__", dep_inner)
 
 
-def gradle_wrapper_template_dir() -> Path | None:
-    """若存在 `templates/gradle-{gradle_version()}` 且含 gradlew，则返回该目录。"""
-    d = REPO_DIR / "templates" / f"gradle-{gradle_version()}"
+def gradle_wrapper_template_dir(gradle_ver: str) -> Path | None:
+    """若存在 `templates/gradle-<版本>` 且含 gradlew，则返回该目录。"""
+    d = REPO_DIR / "templates" / f"gradle-{gradle_ver}"
     if d.is_dir() and (d / "gradlew").is_file():
         return d
     return None
@@ -395,10 +431,8 @@ def copy_gradle_wrapper_template(template_root: Path, dest_root: Path) -> None:
         shutil.copy2(src, dst)
 
 
-def write_gradle_wrapper_properties(root: Path) -> None:
-    dist = (
-        f"https\\://services.gradle.org/distributions/gradle-{gradle_version()}-bin.zip"
-    )
+def write_gradle_wrapper_properties(root: Path, gradle_ver: str) -> None:
+    dist = f"https\\://services.gradle.org/distributions/gradle-{gradle_ver}-bin.zip"
     props = textwrap.dedent(
         f"""
         distributionBase=GRADLE_USER_HOME
@@ -413,20 +447,28 @@ def write_gradle_wrapper_properties(root: Path) -> None:
     write_if_changed(root / "gradle" / "wrapper" / "gradle-wrapper.properties", props)
 
 
-def install_gradle_wrapper(out: Path) -> bool:
+def install_gradle_wrapper(out: Path, gradle_ver: str) -> bool:
     """安装 Wrapper：优先复制同版本仓库模板，否则仅写 gradle-wrapper.properties。
     返回是否已从模板复制完整 Wrapper。"""
-    tpl = gradle_wrapper_template_dir()
+    tpl = gradle_wrapper_template_dir(gradle_ver)
     if tpl is not None:
         copy_gradle_wrapper_template(tpl, out)
         return True
-    write_gradle_wrapper_properties(out)
+    write_gradle_wrapper_properties(out, gradle_ver)
     return False
 
 
-def matrix_cell_dir_name(modules: int, lines_per_file: int, source_mode: str) -> str:
-    tag = MATRIX_MODE_DIR_TAG[source_mode]
-    return f"m{modules:04d}-l{lines_per_file:04d}-{tag}"
+def matrix_cell_dir_name(
+    gradle_ver: str, jvm_target: str, source_mode: str, kotlin_ver: str | None
+) -> str:
+    g = gradle_ver.replace("/", "_")
+    j = jvm_target.replace("/", "_")
+    if source_mode == "java-only":
+        return f"gradle-{g}-jdk{j}-java"
+    kv = (kotlin_ver or "").replace("/", "_")
+    if source_mode == "kotlin-only":
+        return f"gradle-{g}-jdk{j}-kotlin-{kv}"
+    return f"gradle-{g}-jdk{j}-mixed-{kv}"
 
 
 def generate_benchmark_project(
@@ -440,16 +482,28 @@ def generate_benchmark_project(
     dependency_pattern: str,
     root_package: str,
     jvm_target: str,
+    gradle_ver: str,
+    kotlin_ver: str | None,
 ) -> bool:
     """在已存在的 `out` 目录中写入完整工程（不创建/删除父路径）。
+    kotlin_ver 在 java-only 时应为 None；kotlin-only / mixed 时必须提供。
     返回 True 表示已从本仓库 templates/gradle-* 复制完整 Wrapper。"""
+    if module_source_mode == "java-only":
+        root_kv: str | None = None
+    else:
+        if not kotlin_ver:
+            raise ValueError("kotlin-only / mixed 需要 kotlin_ver")
+        root_kv = kotlin_ver
     n = modules
     names = [module_name(i) for i in range(n)]
     alloc = lines_allocation(lines_per_module, files_per_module, lines_per_file)
 
     write_if_changed(out / "settings.gradle.kts", root_settings_kts(names))
-    write_if_changed(out / "build.gradle.kts", root_build_kts(jvm_target))
-    wrapper_bundled = install_gradle_wrapper(out)
+    write_if_changed(
+        out / "build.gradle.kts", root_build_kts(module_source_mode, root_kv)
+    )
+    write_if_changed(out / "gradle.properties", root_gradle_properties())
+    wrapper_bundled = install_gradle_wrapper(out, gradle_ver)
 
     for i, proj in enumerate(names):
         pkg = f"{root_package}.{proj}"
@@ -516,41 +570,55 @@ def run_matrix(args: argparse.Namespace) -> int:
     if err is not None:
         return err
 
-    combos = list(
-        itertools.product(
-            MATRIX_MODULE_COUNTS, MATRIX_LINES_PER_FILE, MATRIX_SOURCE_MODES
-        )
-    )
+    combos: list[tuple[str, str, str, str | None]] = []
+    for gv in MATRIX_GRADLE_VERSIONS:
+        for jvm in MATRIX_JVM_TARGETS:
+            for mode in MATRIX_SOURCE_MODES:
+                if mode == "java-only":
+                    combos.append((gv, jvm, mode, None))
+                else:
+                    for kv in MATRIX_KOTLIN_VERSIONS:
+                        combos.append((gv, jvm, mode, kv))
+
     manifest_lines = [
-        "# modules × lines_per_file × source_mode → subdir",
-        f"# files_per_module (fixed) = {args.matrix_files_per_module}",
+        "# gradle_version × jdk × source_mode × kotlin_version → subdir",
+        f"# modules (fixed) = {MATRIX_MODULES}",
+        f"# lines_per_file (fixed) = {MATRIX_LINES_PER_FILE_FIXED}",
+        f"# files_per_module = {args.matrix_files_per_module}",
         f"# dependency_pattern = {args.dependency_pattern}",
         "",
     ]
 
-    for modules, lines_pf, mode in combos:
-        cell = root / matrix_cell_dir_name(modules, lines_pf, mode)
+    for gv, jvm, mode, kv in combos:
+        cell = root / matrix_cell_dir_name(gv, jvm, mode, kv)
         if cell.exists():
             shutil.rmtree(cell)
         cell.mkdir(parents=True)
         generate_benchmark_project(
             cell,
-            modules=modules,
+            modules=MATRIX_MODULES,
             files_per_module=args.matrix_files_per_module,
-            lines_per_file=lines_pf,
+            lines_per_file=MATRIX_LINES_PER_FILE_FIXED,
             lines_per_module=None,
             module_source_mode=mode,
             dependency_pattern=args.dependency_pattern,
             root_package=args.root_package,
-            jvm_target=args.jvm_target,
+            jvm_target=jvm,
+            gradle_ver=gv,
+            kotlin_ver=kv,
         )
         rel = cell.name
-        manifest_lines.append(f"{modules}\t{lines_pf}\t{mode}\t{rel}")
-        print(f"已生成 {rel}（{modules} 模块, 每文件 {lines_pf} 行, {mode}）")
+        kv_col = kv or "-"
+        manifest_lines.append(f"{gv}\t{jvm}\t{mode}\t{kv_col}\t{rel}")
+        print(
+            f"已生成 {rel}（Gradle {gv}, JDK {jvm}, {mode}"
+            + ("" if kv is None else f", Kotlin {kv}")
+            + f", {MATRIX_MODULES} 模块）"
+        )
 
     write_if_changed(root / "MATRIX-MANIFEST.txt", "\n".join(manifest_lines) + "\n")
     print(f"\n矩阵共 {len(combos)} 份工程 -> {root}（见 MATRIX-MANIFEST.txt）")
-    if gradle_wrapper_template_dir() is not None:
+    if any(gradle_wrapper_template_dir(gv) for gv in MATRIX_GRADLE_VERSIONS):
         print(
             "各子目录已含 Gradle Wrapper（来自本仓库 templates），可直接 ./gradlew 构建。"
         )
@@ -564,10 +632,7 @@ def main() -> int:
     if args.matrix:
         return run_matrix(args)
 
-    if args.modules is None:
-        print("请指定 -n/--modules，或使用 --matrix", file=sys.stderr)
-        return 2
-    n = args.modules
+    n = args.modules if args.modules is not None else DEFAULT_MODULES
     if n < 1:
         print("modules 至少为 1", file=sys.stderr)
         return 2
@@ -582,6 +647,17 @@ def main() -> int:
     if err is not None:
         return err
 
+    gver = args.gradle_version.strip()
+    if not gver:
+        print("--gradle-version 不能为空", file=sys.stderr)
+        return 2
+    kver: str | None = None
+    if args.module_source_mode != "java-only":
+        kver = args.kotlin_version.strip()
+        if not kver:
+            print("--kotlin-version 不能为空（kotlin-only / mixed）", file=sys.stderr)
+            return 2
+
     bundled = generate_benchmark_project(
         out,
         modules=n,
@@ -592,17 +668,22 @@ def main() -> int:
         dependency_pattern=args.dependency_pattern,
         root_package=args.root_package,
         jvm_target=args.jvm_target,
+        gradle_ver=gver,
+        kotlin_ver=kver,
     )
 
-    print(f"已生成 {n} 个模块 -> {out}")
+    print(
+        f"已生成 {n} 个模块 -> {out}（Gradle {gver}"
+        + (f", Kotlin {kver}" if kver else "")
+        + ")"
+    )
     if bundled:
         print(
             "下一步: cd 到输出目录并执行构建（如 ./gradlew compileJava compileKotlin）。"
         )
     else:
-        v = gradle_version()
         print(
-            f"下一步: cd 到输出目录并执行 gradle wrapper --gradle-version {v} "
+            f"下一步: cd 到输出目录并执行 gradle wrapper --gradle-version {gver} "
             "生成 gradlew，然后执行构建（如 ./gradlew compileJava compileKotlin）。"
         )
     return 0

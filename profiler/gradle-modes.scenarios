@@ -3,6 +3,7 @@ baseline {
     cleanup-tasks = ["clean"]
     gradle-args = [
         "--rerun-tasks",
+        "--parallel",
         "--no-build-cache",
         "--no-configuration-cache",
         "--no-configure-on-demand"
@@ -13,29 +14,10 @@ build-cache {
     tasks = ["classes"]
     cleanup-tasks = ["clean"]
     gradle-args = [
+        "--parallel",
         "--build-cache",
         "--no-configuration-cache",
         "--no-configure-on-demand"
-    ]
-}
-
-configuration-cache {
-    tasks = ["classes"]
-    cleanup-tasks = ["clean"]
-    gradle-args = [
-        "--no-build-cache",
-        "--configuration-cache",
-        "--no-configure-on-demand"
-    ]
-}
-
-configure-on-demand {
-    tasks = ["classes"]
-    cleanup-tasks = ["clean"]
-    gradle-args = [
-        "--no-build-cache",
-        "--no-configuration-cache",
-        "--configure-on-demand"
     ]
 }
 
@@ -43,6 +25,7 @@ build-cache-configuration-cache {
     tasks = ["classes"]
     cleanup-tasks = ["clean"]
     gradle-args = [
+        "--parallel",
         "--build-cache",
         "--configuration-cache",
         "--no-configure-on-demand"
@@ -53,6 +36,7 @@ all-three {
     tasks = ["classes"]
     cleanup-tasks = ["clean"]
     gradle-args = [
+        "--parallel",
         "--build-cache",
         "--configuration-cache",
         "--configure-on-demand"

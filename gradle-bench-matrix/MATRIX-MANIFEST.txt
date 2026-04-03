@@ -1,31 +1,21 @@
-# modules × lines_per_file × source_mode → subdir
-# files_per_module (fixed) = 10
+# gradle_version × jdk × source_mode × kotlin_version → subdir
+# modules (fixed) = 1000
+# lines_per_file (fixed) = 500
+# files_per_module = 10
 # dependency_pattern = chain
 
-10	10	kotlin-only	m0010-l0010-kotlin
-10	10	java-only	m0010-l0010-java
-10	10	mixed	m0010-l0010-mixed
-10	100	kotlin-only	m0010-l0100-kotlin
-10	100	java-only	m0010-l0100-java
-10	100	mixed	m0010-l0100-mixed
-10	1000	kotlin-only	m0010-l1000-kotlin
-10	1000	java-only	m0010-l1000-java
-10	1000	mixed	m0010-l1000-mixed
-100	10	kotlin-only	m0100-l0010-kotlin
-100	10	java-only	m0100-l0010-java
-100	10	mixed	m0100-l0010-mixed
-100	100	kotlin-only	m0100-l0100-kotlin
-100	100	java-only	m0100-l0100-java
-100	100	mixed	m0100-l0100-mixed
-100	1000	kotlin-only	m0100-l1000-kotlin
-100	1000	java-only	m0100-l1000-java
-100	1000	mixed	m0100-l1000-mixed
-1000	10	kotlin-only	m1000-l0010-kotlin
-1000	10	java-only	m1000-l0010-java
-1000	10	mixed	m1000-l0010-mixed
-1000	100	kotlin-only	m1000-l0100-kotlin
-1000	100	java-only	m1000-l0100-java
-1000	100	mixed	m1000-l0100-mixed
-1000	1000	kotlin-only	m1000-l1000-kotlin
-1000	1000	java-only	m1000-l1000-java
-1000	1000	mixed	m1000-l1000-mixed
+7.5.1	11	java-only	-	gradle-7.5.1-jdk11-java
+7.5.1	11	kotlin-only	2.0.21	gradle-7.5.1-jdk11-kotlin-2.0.21
+7.5.1	11	kotlin-only	2.4.0-Beta1	gradle-7.5.1-jdk11-kotlin-2.4.0-Beta1
+7.5.1	11	mixed	2.0.21	gradle-7.5.1-jdk11-mixed-2.0.21
+7.5.1	11	mixed	2.4.0-Beta1	gradle-7.5.1-jdk11-mixed-2.4.0-Beta1
+8.14.4	11	java-only	-	gradle-8.14.4-jdk11-java
+8.14.4	11	kotlin-only	2.0.21	gradle-8.14.4-jdk11-kotlin-2.0.21
+8.14.4	11	kotlin-only	2.4.0-Beta1	gradle-8.14.4-jdk11-kotlin-2.4.0-Beta1
+8.14.4	11	mixed	2.0.21	gradle-8.14.4-jdk11-mixed-2.0.21
+8.14.4	11	mixed	2.4.0-Beta1	gradle-8.14.4-jdk11-mixed-2.4.0-Beta1
+9.4.1	11	java-only	-	gradle-9.4.1-jdk11-java
+9.4.1	11	kotlin-only	2.0.21	gradle-9.4.1-jdk11-kotlin-2.0.21
+9.4.1	11	kotlin-only	2.4.0-Beta1	gradle-9.4.1-jdk11-kotlin-2.4.0-Beta1
+9.4.1	11	mixed	2.0.21	gradle-9.4.1-jdk11-mixed-2.0.21
+9.4.1	11	mixed	2.4.0-Beta1	gradle-9.4.1-jdk11-mixed-2.4.0-Beta1
