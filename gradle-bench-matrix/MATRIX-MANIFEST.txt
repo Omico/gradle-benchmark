@@ -6,9 +6,7 @@
 
 7.5.1	11	java-only	-	gradle-7.5.1-jdk11-java
 7.5.1	11	kotlin-only	2.0.21	gradle-7.5.1-jdk11-kotlin-2.0.21
-7.5.1	11	kotlin-only	2.4.0-Beta1	gradle-7.5.1-jdk11-kotlin-2.4.0-Beta1
 7.5.1	11	mixed	2.0.21	gradle-7.5.1-jdk11-mixed-2.0.21
-7.5.1	11	mixed	2.4.0-Beta1	gradle-7.5.1-jdk11-mixed-2.4.0-Beta1
 8.14.4	11	java-only	-	gradle-8.14.4-jdk11-java
 8.14.4	11	kotlin-only	2.0.21	gradle-8.14.4-jdk11-kotlin-2.0.21
 8.14.4	11	kotlin-only	2.4.0-Beta1	gradle-8.14.4-jdk11-kotlin-2.4.0-Beta1
